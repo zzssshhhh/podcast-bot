@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import json
 import requests
 from datetime import datetime
 
@@ -21,7 +22,11 @@ def send_wechat_message(content):
         "msgtype": "text",
         "text": {"content": content}
     }
-    resp = requests.post(url, json=data).json()
+    resp = requests.post(
+        url,
+        data=json.dumps(data, ensure_ascii=False).encode('utf-8'),
+        headers={'Content-Type': 'application/json; charset=utf-8'}
+    ).json()
     print(resp)
     if resp.get("errcode") == 0:
         print("推送成功")
@@ -45,4 +50,4 @@ summary = f"""
 ▸ 趋势判断：短期难完全取代，但正在快速蚕食市场份额
 """
 
-send_wechat_message(summary.strip().encode('utf-8').decode('utf-8'))
+send_wechat_message(summary.strip())
