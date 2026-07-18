@@ -26,4 +26,5 @@ jobs:
           WECHAT_APPID: ${{ secrets.WECHAT_APPID }}
           WECHAT_APPSECRET: ${{ secrets.WECHAT_APPSECRET }}
           WECHAT_OPENID: ${{ secrets.WECHAT_OPENID }}
+          RSS_URL: ${{ secrets.RSS_URL }}
         run: python push.py
