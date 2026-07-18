@@ -1,0 +1,29 @@
+name: 每日播客摘要推送
+
+on:
+  schedule:
+    # 每天北京时间早上8:00执行 (UTC 0:00)
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  send-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查代码
+        uses: actions/checkout@v3
+
+      - name: 安装 Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 运行推送脚本
+        env:
+          WECHAT_APPID: ${{ secrets.WECHAT_APPID }}
+          WECHAT_APPSECRET: ${{ secrets.WECHAT_APPSECRET }}
+          WECHAT_OPENID: ${{ secrets.WECHAT_OPENID }}
+        run: python push.py
