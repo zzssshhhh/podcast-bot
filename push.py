@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import requests
 from datetime import datetime
@@ -44,4 +45,4 @@ summary = f"""
 ▸ 趋势判断：短期难完全取代，但正在快速蚕食市场份额
 """
 
-send_wechat_message(summary.strip())
+send_wechat_message(summary.strip().encode('utf-8').decode('utf-8'))
