@@ -2,12 +2,14 @@
 import os
 import json
 import requests
+import feedparser
 from datetime import datetime
 
 # 从 GitHub Secrets 读取配置
 WECHAT_APPID = os.environ['WECHAT_APPID']
 WECHAT_APPSECRET = os.environ['WECHAT_APPSECRET']
 WECHAT_OPENID = os.environ['WECHAT_OPENID']
+RSS_URL = os.environ['RSS_URL']
 
 def get_wechat_token():
     url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={WECHAT_APPID}&secret={WECHAT_APPSECRET}"
@@ -33,21 +35,41 @@ def send_wechat_message(content):
     else:
         print(f"推送失败: {resp}")
 
-# 模拟摘要内容（稍后替换成真实逻辑）
-summary = f"""
+def get_latest_episode():
+    """从 RSS 获取最新一期播客信息"""
+    feed = feedparser.parse(RSS_URL)
+    if not feed.entries:
+        raise Exception("RSS 中没有找到任何节目")
+    latest = feed.entries[0]
+    title = latest.title
+    link = latest.link
+    # 查找音频链接（通常位于 enclosures 或 links 中）
+    audio_url = None
+    for enclosure in latest.enclosures:
+        if 'audio' in enclosure.type:
+            audio_url = enclosure.href
+            break
+    if not audio_url:
+        # 备用：从 links 中寻找
+        for link_item in latest.links:
+            if 'audio' in link_item.type:
+                audio_url = link_item.href
+                break
+    return title, audio_url, link
+
+# 主流程
+try:
+    title, audio_url, episode_link = get_latest_episode()
+    summary = f"""
 📻 声动早咖啡 | {datetime.now().strftime('%Y年%m月%d日')}
 
-【今日新闻速览】
-• OpenAI 发布 GPT-5，推理与多模态能力显著提升
-• 特斯拉 Cybertruck 交付量同比增长 20%
-• 字节跳动剪映上线 AI 视频生成功能
+✅ 最新一期已找到：
+🎙️ 标题：{title}
+🔗 节目链接：{episode_link}
+🎧 音频链接：{audio_url if audio_url else '未找到'}
 
-【深度解读：AI 搜索能否取代传统搜索？】
-▸ 核心变化：从“给出链接”转向“直接生成答案”
-▸ 技术路线一：基于传统搜索索引 + 大模型总结（微软 Bing）
-▸ 技术路线二：自建索引的纯 AI 搜索（Perplexity）
-▸ 主要挑战：准确性与实时信息更新的平衡
-▸ 趋势判断：短期难完全取代，但正在快速蚕食市场份额
+（下一步将自动转写此音频并生成摘要）
 """
-
-send_wechat_message(summary.strip())
+    send_wechat_message(summary.strip())
+except Exception as e:
+    send_wechat_message(f"❌ 获取播客信息失败：{str(e)}")
