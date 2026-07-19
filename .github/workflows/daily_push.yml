@@ -2,9 +2,8 @@ name: 每日播客摘要推送
 
 on:
   schedule:
-    # 每天北京时间早上8:00执行 (UTC 0:00)
     - cron: '0 0 * * *'
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   send-summary:
@@ -30,4 +29,6 @@ jobs:
           WECHAT_APPSECRET: ${{ secrets.WECHAT_APPSECRET }}
           WECHAT_OPENID: ${{ secrets.WECHAT_OPENID }}
           RSS_URL: ${{ secrets.RSS_URL }}
+          ALI_ACCESS_KEY_ID: ${{ secrets.ALI_ACCESS_KEY_ID }}
+          ALI_ACCESS_KEY_SECRET: ${{ secrets.ALI_ACCESS_KEY_SECRET }}
         run: python push.py
