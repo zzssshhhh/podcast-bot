@@ -8,7 +8,6 @@ import whisper
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 
-# 环境变量
 WECHAT_APPID = os.environ['WECHAT_APPID']
 WECHAT_APPSECRET = os.environ['WECHAT_APPSECRET']
 WECHAT_OPENID = os.environ['WECHAT_OPENID']
@@ -21,7 +20,6 @@ def get_wechat_token():
     return requests.get(url).json().get("access_token")
 
 def upload_image(image_path, token):
-    """上传图片素材，返回 media_id"""
     url = f"https://api.weixin.qq.com/cgi-bin/media/upload?access_token={token}&type=image"
     with open(image_path, 'rb') as f:
         resp = requests.post(url, files={"media": f}).json()
@@ -31,7 +29,6 @@ def upload_image(image_path, token):
         raise Exception(f"图片上传失败: {resp}")
 
 def send_image_message(media_id, token):
-    """发送图片消息"""
     url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={token}"
     data = {
         "touser": WECHAT_OPENID,
@@ -83,16 +80,16 @@ def get_structured_summary(raw_text, title):
         "Content-Type": "application/json"
     }
 
-    prompt = f"""你是专业播客编辑。将以下无标点、未分段的转录稿整理为结构化摘要。
+    prompt = f"""你是一位专业的商业科技播客编辑。请将以下无标点、未分段的转录稿整理为一篇流畅易读的摘要。
 
 播客标题：{title}
 
-要求：
-1. 添加正确标点符号。
-2. 结构化为两部分：
-   【今日新闻速览】：每条新闻用5W要素简要列出（要素缺失则跳过）。
-   【深度解读】：先点明核心论点，再用3-5个要点概括论证过程。
-3. 直接输出最终结果，不加任何解释。
+写作要求：
+1. 全文分成两大部分，分别冠以标题：【今日新闻速览】和【深度解读】。
+2. 【今日新闻速览】：用几个独立的自然段落，每段叙述一条新闻。不必列出5W，而是像讲故事一样，把关键信息融入连贯的语句中。段落之间空一行。
+3. 【深度解读】：先用一两句话点明本期深度话题的核心，然后以3-5个要点展开论述。每个要点也写成完整、通顺的句子，不要用列表或编号，而是分段叙述。
+4. 全文务必添加正确的标点符号，让整篇文章读起来像一篇专业的新闻简报。
+5. 直接输出最终结果，不要加任何解释性文字。
 
 转录稿：
 {raw_text}"""
@@ -117,36 +114,24 @@ def get_structured_summary(raw_text, title):
 
 # ========== 文字转图片 ==========
 def text_to_image(text, title, date_str, link, output_path="summary.png"):
-    """将结构化摘要渲染为图片，返回图片路径"""
-    # 图片尺寸与背景
     width = 800
     bg_color = (255, 255, 255)
     img = Image.new('RGB', (width, 100), bg_color)
     draw = ImageDraw.Draw(img)
 
-    # 加载中文字体
     try:
         font_title = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 32)
         font_body = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 20)
     except:
-        # 备用字体
         font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
         font_body = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
 
-    # 准备头部信息
-    header = f"{title} | {date_str}"
-    # 先计算所有文本高度以确定图片总高度
-    # 由于中文字体较复杂，我们用一种简单方法：逐行绘制并动态扩展图片
-    # 这里采用先计算预估高度，再创建足够大的画布
-
-    # 分行函数
     def wrap_text(text, font, max_width):
         lines = []
         for paragraph in text.split('\n'):
             if not paragraph:
                 lines.append('')
                 continue
-            # 单段内按字符处理
             line = ""
             for char in paragraph:
                 test_line = line + char
@@ -160,45 +145,36 @@ def text_to_image(text, title, date_str, link, output_path="summary.png"):
                 lines.append(line)
         return lines
 
-    # 布局参数
     left_margin = 40
     top_margin = 40
     line_spacing = 8
     max_text_width = width - 2 * left_margin
 
-    # 准备各部分文字
-    # 标题
+    header = f"{title} | {date_str}"
     title_lines = wrap_text(header, font_title, max_text_width)
-    # 正文
     body_lines = []
-    # 分割出正文各部分，保持空行
     for section in text.split('\n'):
         if section.strip() == '':
             body_lines.append('')
         else:
             body_lines.extend(wrap_text(section, font_body, max_text_width))
 
-    # 计算总高度
     title_height = len(title_lines) * (font_title.size + line_spacing)
     body_height = len(body_lines) * (font_body.size + line_spacing)
-    total_height = top_margin + title_height + 20 + body_height + top_margin + 30  # 留白
+    total_height = top_margin + title_height + 20 + body_height + top_margin + 30
 
-    # 创建正确高度的图片
     img = Image.new('RGB', (width, total_height), bg_color)
     draw = ImageDraw.Draw(img)
 
-    # 绘制标题
     y = top_margin
     for line in title_lines:
         draw.text((left_margin, y), line, fill=(0,0,0), font=font_title)
         y += font_title.size + line_spacing
 
-    # 分隔线
     y += 10
     draw.line([(left_margin, y), (width - left_margin, y)], fill=(200,200,200), width=2)
     y += 15
 
-    # 绘制正文
     for line in body_lines:
         if line == '':
             y += font_body.size + line_spacing
@@ -222,14 +198,12 @@ try:
     raw_text = transcribe_audio(audio_path)
     print(f"转写字数: {len(raw_text)}")
 
-    print("4. AI 生成结构化摘要...")
+    print("4. AI 生成叙述型摘要...")
     structured = get_structured_summary(raw_text, title)
 
-    # 如果 AI 返回空或失败，回退到原文
     if not structured or len(structured) < 10:
         structured = raw_text
 
-    # 准备日期字符串
     date_str = datetime.now().strftime('%Y年%m月%d日')
 
     print("5. 生成图片...")
@@ -245,7 +219,6 @@ try:
 except Exception as e:
     import traceback
     traceback.print_exc()
-    # 尝试发送文本错误消息
     try:
         token = get_wechat_token()
         url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={token}"
