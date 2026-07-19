@@ -86,9 +86,11 @@ def get_structured_summary(raw_text, title):
 
 写作要求：
 1. 全文分成两大部分，分别冠以标题：【今日新闻速览】和【深度解读】。
-2. 【今日新闻速览】：用几个独立的自然段落，每段叙述一条新闻。不必列出5W，而是像讲故事一样，把关键信息融入连贯的语句中。段落之间空一行。
-3. 【深度解读】：先用一两句话点明本期深度话题的核心，然后以3-5个要点展开论述。每个要点也写成完整、通顺的句子，不要用列表或编号，而是分段叙述。
-4. 全文务必添加正确的标点符号，让整篇文章读起来像一篇专业的新闻简报。
+2. 【今日新闻速览】：每条新闻用 "▎" 开头，后跟该新闻的简短标题（10字以内），换行后再用1-2个自然段落叙述该新闻。新闻之间空一行。格式如下：
+   ▎OpenAI 发布 GPT-5
+   该公司今日凌晨正式发布了新一代大模型，推理能力大幅提升……
+3. 【深度解读】：用 "▎" 开头，后跟本期核心话题的简短标题，换行后先用一两句话点明核心，再分段展开3-5个论述要点（每个要点写为完整、通顺的段落）。
+4. 全文务必添加正确的标点符号，让文章读起来像专业新闻简报。
 5. 直接输出最终结果，不要加任何解释性文字。
 
 转录稿：
@@ -112,19 +114,27 @@ def get_structured_summary(raw_text, title):
         print(f"AI 异常: {e}")
         return raw_text
 
-# ========== 文字转图片 ==========
+# ========== 文字转图片（支持分层加粗） ==========
 def text_to_image(text, title, date_str, link, output_path="summary.png"):
     width = 800
     bg_color = (255, 255, 255)
-    img = Image.new('RGB', (width, 100), bg_color)
-    draw = ImageDraw.Draw(img)
+    left_margin = 40
+    top_margin = 40
+    line_spacing = 8
+    max_text_width = width - 2 * left_margin
 
     try:
         font_title = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 32)
+        font_subtitle = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 24)  # 用于 ▎ 行
         font_body = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 20)
     except:
-        font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
-        font_body = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+        font_title = ImageFont.truetype("/usr/share/fonts/dejavu/DejaVuSans.ttf", 32)
+        font_subtitle = ImageFont.truetype("/usr/share/fonts/dejavu/DejaVuSans.ttf", 24)
+        font_body = ImageFont.truetype("/usr/share/fonts/dejavu/DejaVuSans.ttf", 20)
+
+    # 预备绘图以计算尺寸
+    temp_img = Image.new('RGB', (width, 100), bg_color)
+    draw = ImageDraw.Draw(temp_img)
 
     def wrap_text(text, font, max_width):
         lines = []
@@ -145,42 +155,69 @@ def text_to_image(text, title, date_str, link, output_path="summary.png"):
                 lines.append(line)
         return lines
 
-    left_margin = 40
-    top_margin = 40
-    line_spacing = 8
-    max_text_width = width - 2 * left_margin
+    # 准备所有行，每条行附带其使用的字体和颜色
+    # 结构：[(text, font, color), ...]
+    all_lines = []
 
+    # 先加头部
     header = f"{title} | {date_str}"
-    title_lines = wrap_text(header, font_title, max_text_width)
-    body_lines = []
+    all_lines.append((header, font_title, (0,0,0)))
+    all_lines.append(('', font_body, (0,0,0)))  # 空行
+
+    # 分隔线标记（后面实际画线）
+    all_lines.append(('---', font_body, (0,0,0)))
+
+    # 解析正文，识别 ▎ 行
     for section in text.split('\n'):
-        if section.strip() == '':
-            body_lines.append('')
+        stripped = section.strip()
+        if not stripped:
+            all_lines.append(('', font_body, (0,0,0)))
+            continue
+
+        if stripped.startswith('▎'):
+            # 重点标题行：加粗字体、深色
+            all_lines.append((stripped, font_subtitle, (0,0,0)))
+        elif stripped.startswith('【'):
+            # 大标题行（如【今日新闻速览】）
+            all_lines.append((stripped, font_title, (0,0,0)))
         else:
-            body_lines.extend(wrap_text(section, font_body, max_text_width))
+            # 正文行：正常字体、深灰色
+            # 先拆分成多行以适应宽度
+            body_lines = wrap_text(stripped, font_body, max_text_width)
+            for bl in body_lines:
+                all_lines.append((bl, font_body, (60,60,60)))
 
-    title_height = len(title_lines) * (font_title.size + line_spacing)
-    body_height = len(body_lines) * (font_body.size + line_spacing)
-    total_height = top_margin + title_height + 20 + body_height + top_margin + 30
+    # 计算总高度
+    total_height = top_margin
+    for line_text, font, color in all_lines:
+        if line_text == '---':
+            total_height += 20  # 分隔线高度
+            continue
+        if not line_text:
+            total_height += font_body.size + line_spacing
+            continue
+        bbox = draw.textbbox((0,0), line_text, font=font)
+        total_height += (bbox[3] - bbox[1]) + line_spacing
+    total_height += top_margin
 
+    # 正式创建图片并绘制
     img = Image.new('RGB', (width, total_height), bg_color)
     draw = ImageDraw.Draw(img)
 
     y = top_margin
-    for line in title_lines:
-        draw.text((left_margin, y), line, fill=(0,0,0), font=font_title)
-        y += font_title.size + line_spacing
-
-    y += 10
-    draw.line([(left_margin, y), (width - left_margin, y)], fill=(200,200,200), width=2)
-    y += 15
-
-    for line in body_lines:
-        if line == '':
+    for line_text, font, color in all_lines:
+        if line_text == '---':
+            # 画分隔线
+            y += 5
+            draw.line([(left_margin, y), (width - left_margin, y)], fill=(200,200,200), width=2)
+            y += 15
+            continue
+        if not line_text:
             y += font_body.size + line_spacing
             continue
-        draw.text((left_margin, y), line, fill=(50,50,50), font=font_body)
-        y += font_body.size + line_spacing
+        draw.text((left_margin, y), line_text, fill=color, font=font)
+        bbox = draw.textbbox((0,0), line_text, font=font)
+        y += (bbox[3] - bbox[1]) + line_spacing
 
     img.save(output_path)
     return output_path
@@ -198,7 +235,7 @@ try:
     raw_text = transcribe_audio(audio_path)
     print(f"转写字数: {len(raw_text)}")
 
-    print("4. AI 生成叙述型摘要...")
+    print("4. AI 生成分层摘要...")
     structured = get_structured_summary(raw_text, title)
 
     if not structured or len(structured) < 10:
