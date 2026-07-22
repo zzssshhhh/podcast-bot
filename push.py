@@ -15,7 +15,7 @@ FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', '')
 FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '')
 SUBSCRIPTIONS_FILE = 'subscriptions.json'
 
-# ================= 微信接口（仅用于每日通知）=================
+# ================= 微信 =================
 def get_wechat_token():
     url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={WECHAT_APPID}&secret={WECHAT_APPSECRET}"
     return requests.get(url).json().get("access_token")
@@ -25,10 +25,10 @@ def send_wechat_text(text):
     url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={token}"
     data = {"touser": WECHAT_OPENID, "msgtype": "text", "text": {"content": text}}
     resp = requests.post(url, json=data, headers={"Content-Type": "application/json"}).json()
-    print("微信通知响应:", resp)
+    print("微信通知:", resp)
     return resp.get("errcode") == 0
 
-# ================= 飞书接口 =================
+# ================= 飞书 =================
 def get_feishu_token():
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     payload = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
@@ -36,9 +36,7 @@ def get_feishu_token():
     return resp.get("tenant_access_token")
 
 def create_feishu_doc(title):
-    """创建一个空白飞书文档，返回文档ID"""
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
-        print("飞书密钥未配置，无法创建文档。")
         return None
     token = get_feishu_token()
     if not token:
@@ -47,23 +45,18 @@ def create_feishu_doc(title):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"title": title}
     resp = requests.post(url, headers=headers, json=payload).json()
-    print("创建文档响应:", resp)
+    print("创建文档:", resp)
     if resp.get("code") == 0:
         return resp["data"]["document"]["document_id"]
-    else:
-        print(f"创建文档失败: {resp}")
-        return None
+    return None
 
 def append_to_feishu_doc(doc_id, content):
-    """分批追加内容到飞书文档，每批最多50个块"""
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         return False
-
     token = get_feishu_token()
     if not token:
         return False
 
-    # 将内容拆分成段落块
     blocks = []
     for paragraph in content.split('\n'):
         if not paragraph.strip():
@@ -75,77 +68,61 @@ def append_to_feishu_doc(doc_id, content):
                 "style": {}
             }
         })
-
     if not blocks:
         return False
 
-    # 飞书API每次最多50个块，分批发送
     batch_size = 50
     success = True
-
     for i in range(0, len(blocks), batch_size):
         batch = blocks[i:i + batch_size]
-        url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{doc_id}/blocks/batch_create"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        payload = {"blocks": batch, "location": "end"}
-
+        url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{doc_id}/blocks/{doc_id}/children"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        payload = {"children": batch, "index": -1}
         try:
             resp = requests.post(url, headers=headers, json=payload)
             if resp.status_code == 200:
-                try:
-                    result = resp.json()
-                    print(f"飞书写入第{i//batch_size + 1}批响应: {result}")
-                    if result.get("code") != 0:
-                        print(f"写入失败: {result}")
-                        success = False
-                except:
-                    print(f"响应非JSON: {resp.text[:200]}")
+                result = resp.json()
+                code = result.get("code")
+                print(f"飞书写入第{i//batch_size + 1}批: code={code}")
+                if code != 0:
+                    print(f"失败详情: {result}")
                     success = False
             else:
-                print(f"飞书API错误: {resp.status_code}, {resp.text[:200]}")
+                print(f"飞书HTTP错误: {resp.status_code}, {resp.text[:300]}")
                 success = False
         except Exception as e:
-            print(f"飞书请求异常: {e}")
+            print(f"飞书异常: {e}")
             success = False
-
     return success
 
-# ================= 订阅初始化（自动创建飞书文档）=================
+# ================= 订阅初始化 =================
 def init_subscriptions():
     if not os.path.exists(SUBSCRIPTIONS_FILE):
         with open(SUBSCRIPTIONS_FILE, 'w', encoding='utf-8') as f:
             json.dump([], f)
-
     with open(SUBSCRIPTIONS_FILE, 'r', encoding='utf-8') as f:
         subs = json.load(f)
-
     updated = False
     for sub in subs:
         if not sub.get('feishu_doc_id'):
             doc_name = f"《{sub['name']}》· 摘要存档"
-            print(f"为 {sub['name']} 创建飞书文档...")
             doc_id = create_feishu_doc(doc_name)
             if doc_id:
                 sub['feishu_doc_id'] = doc_id
                 updated = True
-                print(f"已创建: {doc_id}")
-
+                print(f"已为 {sub['name']} 创建文档: {doc_id}")
     if updated:
         with open(SUBSCRIPTIONS_FILE, 'w', encoding='utf-8') as f:
             json.dump(subs, f, ensure_ascii=False, indent=2)
-        # 在 GitHub Actions 中自动提交更新
         if os.environ.get('GITHUB_ACTIONS'):
             os.system('git config user.name "github-actions"')
             os.system('git config user.email "actions@github.com"')
             os.system('git add subscriptions.json')
-            os.system('git commit -m "auto: update subscription doc ids"')
+            os.system('git commit -m "auto: update feishu doc ids"')
             os.system('git push')
     return subs
 
-# ================= 播客获取与转写 =================
+# ================= 播客 =================
 def get_latest_episode(rss_url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     resp = requests.get(rss_url, headers=headers, timeout=30)
@@ -176,11 +153,10 @@ def transcribe_audio(path):
     result = model.transcribe(path, language="zh")
     return result["text"]
 
-# ================= AI 详细论证总结 =================
+# ================= AI 总结 =================
 def summarize_detailed(raw_text, title):
     if not DASHSCOPE_API_KEY or len(DASHSCOPE_API_KEY) < 10:
         return raw_text
-
     max_chars = 8000
     chunks = [raw_text[i:i+max_chars] for i in range(0, len(raw_text), max_chars)]
     final_summary = []
@@ -188,7 +164,6 @@ def summarize_detailed(raw_text, title):
         print(f"总结第 {idx+1}/{len(chunks)} 段...")
         summary = _call_dashscope(chunk, title, idx+1, len(chunks))
         final_summary.append(summary)
-
     if len(final_summary) == 1:
         return final_summary[0]
     merged_prompt = f"""以下是一期播客各部分的分段总结，请整合为一篇连贯完整的详细论证复述稿，不遗漏逻辑步骤。
@@ -202,18 +177,15 @@ def summarize_detailed(raw_text, title):
 def _call_dashscope(text, title, part_num, total_parts):
     url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     headers = {"Authorization": f"Bearer {DASHSCOPE_API_KEY}", "Content-Type": "application/json"}
-
     system_prompt = """你是科技财经播客编辑。任务：
 1. 完整复述论证过程，不遗漏核心观点和逻辑步骤。
 2. 忽略闲聊、玩笑、重复强调的内容，只保留实质性讨论。
 3. 多人协同论证则合并为流畅叙述；观点冲突或补充则区分不同说话者。
 4. 用 "▎" 开头加小标题（8字内）划分板块，自然段落，正确标点。
 5. 直接输出总结正文。"""
-
     user_prompt = f"""播客标题：{title}
 { '第' + str(part_num) + '部分/' + str(total_parts) + '部分：' if total_parts > 1 else '' }
 {text}"""
-
     data = {
         "model": "qwen-plus",
         "messages": [
@@ -240,44 +212,38 @@ def process_podcast(name, rss_url, doc_id):
     print(f"\n=== 处理 {name} ===")
     title, audio_url, link = get_latest_episode(rss_url)
     if not title:
-        print(f"{name} 未找到最新节目，跳过。")
+        print(f"{name} 无更新。")
         return False
-
     print(f"标题: {title}")
     safe_name = name.replace(' ', '_')
     audio_path = f"{safe_name}_episode.m4a"
-
     download_audio(audio_url, audio_path)
     raw_text = transcribe_audio(audio_path)
     print(f"转写字数: {len(raw_text)}")
-
     structured = summarize_detailed(raw_text, title)
     if not structured or len(structured) < 10:
         structured = raw_text
-
     date_str = datetime.now().strftime('%Y年%m月%d日')
     full_text = f"## {date_str}：{title}\n\n{structured}\n\n---\n"
-
     if doc_id:
         success = append_to_feishu_doc(doc_id, full_text)
         if success:
-            print(f"{name} 已写入飞书文档。")
+            print(f"{name} 已写入飞书。")
             return True
         else:
             print(f"{name} 飞书写入失败。")
             return False
     else:
-        print(f"{name} 缺少飞书文档ID，跳过写入。")
+        print(f"{name} 无文档ID。")
         return False
 
-# ================= 主流程 =================
+# ================= 主入口 =================
 def main():
     subscriptions = init_subscriptions()
     updated = []
     for sub in subscriptions:
         if process_podcast(sub['name'], sub['rss'], sub.get('feishu_doc_id', '')):
             updated.append(sub['name'])
-
     if updated:
         msg = f"📻 今日有 {len(updated)} 档播客更新，摘要已存入飞书：\n" + '、'.join(updated)
     else:
