@@ -55,13 +55,15 @@ def create_feishu_doc(title):
         return None
 
 def append_to_feishu_doc(doc_id, content):
+    """分批追加内容到飞书文档，每批最多50个块"""
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         return False
+
     token = get_feishu_token()
     if not token:
         return False
-    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{doc_id}/blocks/batch_create"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # 将内容拆分成段落块
     blocks = []
     for paragraph in content.split('\n'):
         if not paragraph.strip():
@@ -73,12 +75,43 @@ def append_to_feishu_doc(doc_id, content):
                 "style": {}
             }
         })
+
     if not blocks:
         return False
-    payload = {"blocks": blocks, "location": "end"}
-    resp = requests.post(url, headers=headers, json=payload).json()
-    print("飞书写入响应:", resp)
-    return resp.get("code") == 0
+
+    # 飞书API每次最多50个块，分批发送
+    batch_size = 50
+    success = True
+
+    for i in range(0, len(blocks), batch_size):
+        batch = blocks[i:i + batch_size]
+        url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{doc_id}/blocks/batch_create"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        payload = {"blocks": batch, "location": "end"}
+
+        try:
+            resp = requests.post(url, headers=headers, json=payload)
+            if resp.status_code == 200:
+                try:
+                    result = resp.json()
+                    print(f"飞书写入第{i//batch_size + 1}批响应: {result}")
+                    if result.get("code") != 0:
+                        print(f"写入失败: {result}")
+                        success = False
+                except:
+                    print(f"响应非JSON: {resp.text[:200]}")
+                    success = False
+            else:
+                print(f"飞书API错误: {resp.status_code}, {resp.text[:200]}")
+                success = False
+        except Exception as e:
+            print(f"飞书请求异常: {e}")
+            success = False
+
+    return success
 
 # ================= 订阅初始化（自动创建飞书文档）=================
 def init_subscriptions():
