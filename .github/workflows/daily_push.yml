@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # 允许脚本自动提交更新的订阅文件
+  contents: write
 
 jobs:
   process:
@@ -24,6 +24,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-wqy-zenhei
+
+      - name: 缓存 Whisper 模型
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/whisper
+          key: whisper-medium-v1
 
       - name: 安装 Python 依赖
         run: pip install requests feedparser openai-whisper
