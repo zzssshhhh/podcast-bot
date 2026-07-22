@@ -1,18 +1,22 @@
 [
   {
     "name": "声动早咖啡",
-    "rss": "https://feed.xyzfm.space/q88qwmydeuw8?continueFlag=af62ed3ae2b36a11b0e8f501867a4e83"
+    "rss": "https://feed.xyzfm.space/q88qwmydeuw8?continueFlag=af62ed3ae2b36a11b0e8f501867a4e83",
+    "feishu_doc_id": "O8eXdicAzoo0HMxerKZckHU6nDd"
   },
   {
     "name": "硅谷101",
-    "rss": "http://www.ximalaya.com/album/33244571.xml"
+    "rss": "http://www.ximalaya.com/album/33244571.xml",
+    "feishu_doc_id": "Qrved8CrZoSIjmxvje9czM69n65"
   },
   {
     "name": "商业就是这样",
-    "rss": "http://www.ximalaya.com/album/46587439.xml"
+    "rss": "http://www.ximalaya.com/album/46587439.xml",
+    "feishu_doc_id": "CnxpdLt2EoqDBxx5fwRcUQVmnob"
   },
   {
     "name": "疯投圈",
-    "rss": "https://crazy.capital/feed"
+    "rss": "https://crazy.capital/feed",
+    "feishu_doc_id": "OCx4djMoIoLdObxi1fUcKRj3n7g"
   }
 ]
