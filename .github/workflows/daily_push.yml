@@ -1,15 +1,18 @@
-name: 每日播客摘要推送
+name: 多播客摘要推送
 
 on:
   schedule:
     - cron: '0 0 * * *'  # 每天北京时间 8:00
   workflow_dispatch:
 
+permissions:
+  contents: write  # 允许脚本自动提交更新的订阅文件
+
 jobs:
-  send-summary:
+  process:
     runs-on: ubuntu-latest
     steps:
-      - name: 检查代码
+      - name: 检出代码
         uses: actions/checkout@v3
 
       - name: 安装 Python
@@ -17,19 +20,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 安装系统依赖 (ffmpeg + 中文字体)
+      - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-wqy-zenhei
 
       - name: 安装 Python 依赖
-        run: pip install requests feedparser openai-whisper Pillow
+        run: pip install requests feedparser openai-whisper
 
-      - name: 运行推送脚本
+      - name: 运行主程序
         env:
           WECHAT_APPID: ${{ secrets.WECHAT_APPID }}
           WECHAT_APPSECRET: ${{ secrets.WECHAT_APPSECRET }}
           WECHAT_OPENID: ${{ secrets.WECHAT_OPENID }}
-          RSS_URL: ${{ secrets.RSS_URL }}
           DASHSCOPE_API_KEY: ${{ secrets.ALI_ACCESS_KEY_ID }}
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         run: python push.py
