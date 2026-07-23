@@ -14,6 +14,7 @@ DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
 FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', '')
 FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '')
 SUBSCRIPTIONS_FILE = 'subscriptions.json'
+PROCESSED_FILE = 'processed.json'
 
 # ================= 微信 =================
 def get_wechat_token():
@@ -95,13 +96,15 @@ def append_to_feishu_doc(doc_id, content):
             success = False
     return success
 
-# ================= 订阅初始化 =================
+# ================= 订阅与去重管理 =================
 def init_subscriptions():
     if not os.path.exists(SUBSCRIPTIONS_FILE):
         with open(SUBSCRIPTIONS_FILE, 'w', encoding='utf-8') as f:
             json.dump([], f)
     with open(SUBSCRIPTIONS_FILE, 'r', encoding='utf-8') as f:
         subs = json.load(f)
+
+    # 自动创建飞书文档（仅对没有 doc_id 的播客）
     updated = False
     for sub in subs:
         if not sub.get('feishu_doc_id'):
@@ -111,32 +114,52 @@ def init_subscriptions():
                 sub['feishu_doc_id'] = doc_id
                 updated = True
                 print(f"已为 {sub['name']} 创建文档: {doc_id}")
+
     if updated:
         with open(SUBSCRIPTIONS_FILE, 'w', encoding='utf-8') as f:
             json.dump(subs, f, ensure_ascii=False, indent=2)
-        if os.environ.get('GITHUB_ACTIONS'):
-            os.system('git config user.name "github-actions"')
-            os.system('git config user.email "actions@github.com"')
-            os.system('git add subscriptions.json')
-            os.system('git commit -m "auto: update feishu doc ids"')
-            os.system('git push')
+        git_commit(SUBSCRIPTIONS_FILE, "auto: update feishu doc ids")
+
     return subs
 
-# ================= 播客 =================
+def load_processed():
+    """加载已处理的 guid 记录"""
+    if not os.path.exists(PROCESSED_FILE):
+        return {}
+    with open(PROCESSED_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_processed(data):
+    with open(PROCESSED_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    git_commit(PROCESSED_FILE, "auto: update processed guids")
+
+def git_commit(file_path, message):
+    if os.environ.get('GITHUB_ACTIONS'):
+        os.system('git config user.name "github-actions"')
+        os.system('git config user.email "actions@github.com"')
+        os.system(f'git add {file_path}')
+        os.system(f'git commit -m "{message}"')
+        os.system('git push')
+
+# ================= 播客抓取与过滤 =================
 def get_latest_episode(rss_url):
+    """返回 (title, audio_url, link, guid) 或 (None, None, None, None)"""
     headers = {'User-Agent': 'Mozilla/5.0'}
     resp = requests.get(rss_url, headers=headers, timeout=30)
     resp.raise_for_status()
     feed = feedparser.parse(resp.content)
     if not feed.entries:
-        return None, None, None
+        return None, None, None, None
     latest = feed.entries[0]
     audio_url = None
     for enc in latest.enclosures:
         if 'audio' in enc.type or enc.href.endswith(('.m4a','.mp3')):
             audio_url = enc.href
             break
-    return latest.title, audio_url, latest.link
+    # 获取 guid，如果没有则用 link 或 title 作为后备
+    guid = latest.get('id') or latest.get('link') or latest.title
+    return latest.title, audio_url, latest.link, guid
 
 def download_audio(url, path):
     r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, stream=True)
@@ -207,13 +230,20 @@ def _call_dashscope(text, title, part_num, total_parts):
         print(f"AI 异常: {e}")
         return text
 
-# ================= 单播客处理 =================
-def process_podcast(name, rss_url, doc_id):
+# ================= 单播客处理（带去重） =================
+def process_podcast(name, rss_url, doc_id, processed_db):
     print(f"\n=== 处理 {name} ===")
-    title, audio_url, link = get_latest_episode(rss_url)
+    title, audio_url, link, guid = get_latest_episode(rss_url)
     if not title:
-        print(f"{name} 无更新。")
-        return False
+        print(f"{name} RSS 无条目，跳过。")
+        return False, processed_db
+
+    # 去重检查
+    last_guid = processed_db.get(name)
+    if last_guid and last_guid == guid:
+        print(f"{name} 已处理过该期节目 (guid: {guid})，跳过。")
+        return False, processed_db
+
     print(f"标题: {title}")
     safe_name = name.replace(' ', '_')
     audio_path = f"{safe_name}_episode.m4a"
@@ -225,25 +255,40 @@ def process_podcast(name, rss_url, doc_id):
         structured = raw_text
     date_str = datetime.now().strftime('%Y年%m月%d日')
     full_text = f"## {date_str}：{title}\n\n{structured}\n\n---\n"
+
     if doc_id:
         success = append_to_feishu_doc(doc_id, full_text)
         if success:
             print(f"{name} 已写入飞书。")
-            return True
+            processed_db[name] = guid  # 更新已处理 guid
+            return True, processed_db
         else:
-            print(f"{name} 飞书写入失败。")
-            return False
+            print(f"{name} 飞书写入失败，但 guid 已处理，避免重复尝试。")
+            processed_db[name] = guid
+            return False, processed_db
     else:
-        print(f"{name} 无文档ID。")
-        return False
+        print(f"{name} 无飞书文档 ID，跳过写入。")
+        # 即使未写入，也记录已处理，避免下次重复下载
+        processed_db[name] = guid
+        return False, processed_db
 
 # ================= 主入口 =================
 def main():
     subscriptions = init_subscriptions()
+    processed_db = load_processed()
+
     updated = []
     for sub in subscriptions:
-        if process_podcast(sub['name'], sub['rss'], sub.get('feishu_doc_id', '')):
-            updated.append(sub['name'])
+        name = sub['name']
+        success, processed_db = process_podcast(
+            name, sub['rss'], sub.get('feishu_doc_id', ''), processed_db
+        )
+        if success:
+            updated.append(name)
+
+    # 保存已处理记录
+    save_processed(processed_db)
+
     if updated:
         msg = f"📻 今日有 {len(updated)} 档播客更新，摘要已存入飞书：\n" + '、'.join(updated)
     else:
