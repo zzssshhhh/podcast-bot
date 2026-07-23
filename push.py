@@ -13,6 +13,7 @@ WECHAT_OPENID = os.environ['WECHAT_OPENID']
 DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
 FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', '')
 FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '')
+FEISHU_ADMIN_PHONE = os.environ.get('FEISHU_ADMIN_PHONE', '')  # 你的手机号
 SUBSCRIPTIONS_FILE = 'subscriptions.json'
 PROCESSED_FILE = 'processed.json'
 
@@ -36,6 +37,57 @@ def get_feishu_token():
     resp = requests.post(url, json=payload).json()
     return resp.get("tenant_access_token")
 
+def get_open_id_by_phone(phone, token):
+    """通过手机号获取用户 Open ID"""
+    url = f"https://open.feishu.cn/open-apis/contact/v3/users/batch_get_id?user_id_type=open_id"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {"mobiles": [phone]}
+    resp = requests.post(url, headers=headers, json=payload).json()
+    print("获取 Open ID 响应:", resp)
+    if resp.get("code") == 0 and resp["data"].get("user_list"):
+        return resp["data"]["user_list"][0]["user_id"]
+    return None
+
+def add_doc_manager(doc_id, phone, token):
+    """将手机号用户添加为文档管理员"""
+    open_id = get_open_id_by_phone(phone, token)
+    if not open_id:
+        print(f"未找到手机号 {phone} 对应的用户，无法添加权限。")
+        return False
+
+    url = f"https://open.feishu.cn/open-apis/drive/v1/permissions/{doc_id}/members?type=docx"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "member_type": "openid",
+        "member_id": open_id,
+        "perm": "full_access"  # 可管理
+    }
+    resp = requests.post(url, headers=headers, json=payload).json()
+    print(f"给文档 {doc_id} 添加管理员响应:", resp)
+    if resp.get("code") == 0:
+        print(f"已成功为 {phone} 添加文档管理权限。")
+        return True
+    else:
+        # 如果已经添加过，可能报错，忽略
+        if resp.get("code") == 1411015:  # 权限已存在
+            print("权限已存在，跳过。")
+            return True
+        print(f"添加权限失败: {resp}")
+        return False
+
+def ensure_all_docs_permission(subs, phone):
+    """确保所有现有文档都已添加管理员权限"""
+    if not phone or not subs:
+        return
+    token = get_feishu_token()
+    if not token:
+        return
+    for sub in subs:
+        doc_id = sub.get('feishu_doc_id')
+        if doc_id:
+            print(f"正在确保文档 {doc_id} 的权限...")
+            add_doc_manager(doc_id, phone, token)
+
 def create_feishu_doc(title):
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         return None
@@ -48,11 +100,14 @@ def create_feishu_doc(title):
     resp = requests.post(url, headers=headers, json=payload).json()
     print("创建文档:", resp)
     if resp.get("code") == 0:
-        return resp["data"]["document"]["document_id"]
+        doc_id = resp["data"]["document"]["document_id"]
+        # 创建后自动添加管理员权限
+        if FEISHU_ADMIN_PHONE:
+            add_doc_manager(doc_id, FEISHU_ADMIN_PHONE, token)
+        return doc_id
     return None
 
 def append_to_feishu_doc(doc_id, content):
-    """解析内容并生成层级结构化飞书块"""
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         return False
     token = get_feishu_token()
@@ -64,28 +119,19 @@ def append_to_feishu_doc(doc_id, content):
         stripped = line.strip()
         if not stripped:
             continue
-
-        # 判断块类型
         if stripped.startswith('## '):
-            # H2 标题（如 "## 2026年07月23日：节目名"）
-            block_type = 4  # H2
-            text_content = stripped[3:]  # 去掉 "## "
+            block_type = 4
+            text_content = stripped[3:]
         elif stripped.startswith('▎'):
-            # H3 标题（如 "▎核心观点"）
-            block_type = 5  # H3
-            text_content = stripped  # 保留完整内容（含 ▎ 符号）
+            block_type = 5
+            text_content = stripped
         elif stripped == '---':
-            # 分隔线用空行代替（飞书里可以用空行自然分隔）
             blocks.append({
                 "block_type": 2,
-                "text": {
-                    "elements": [{"text_run": {"content": ""}}],
-                    "style": {}
-                }
+                "text": {"elements": [{"text_run": {"content": ""}}], "style": {}}
             })
             continue
         else:
-            # 正文
             block_type = 2
             text_content = stripped
 
@@ -100,7 +146,6 @@ def append_to_feishu_doc(doc_id, content):
     if not blocks:
         return False
 
-    # 分批写入
     batch_size = 50
     success = True
     for i in range(0, len(blocks), batch_size):
@@ -169,7 +214,7 @@ def git_commit(file_path, message):
         os.system(f'git commit -m "{message}"')
         os.system('git push')
 
-# ================= 播客抓取与过滤 =================
+# ================= 播客处理 =================
 def get_latest_episode(rss_url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     resp = requests.get(rss_url, headers=headers, timeout=30)
@@ -201,7 +246,6 @@ def transcribe_audio(path):
     result = model.transcribe(path, language="zh")
     return result["text"]
 
-# ================= AI 总结 =================
 def summarize_detailed(raw_text, title):
     if not DASHSCOPE_API_KEY or len(DASHSCOPE_API_KEY) < 10:
         return raw_text
@@ -255,7 +299,6 @@ def _call_dashscope(text, title, part_num, total_parts):
         print(f"AI 异常: {e}")
         return text
 
-# ================= 单播客处理 =================
 def process_podcast(name, rss_url, doc_id, processed_db):
     print(f"\n=== 处理 {name} ===")
     title, audio_url, link, guid = get_latest_episode(rss_url)
@@ -298,6 +341,11 @@ def process_podcast(name, rss_url, doc_id, processed_db):
 # ================= 主入口 =================
 def main():
     subscriptions = init_subscriptions()
+
+    # 确保所有现有文档都已添加你为管理员（每次运行都会检查，但权限存在时会跳过）
+    if FEISHU_ADMIN_PHONE:
+        ensure_all_docs_permission(subscriptions, FEISHU_ADMIN_PHONE)
+
     processed_db = load_processed()
 
     updated = []
