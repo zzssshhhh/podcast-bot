@@ -52,6 +52,7 @@ def create_feishu_doc(title):
     return None
 
 def append_to_feishu_doc(doc_id, content):
+    """解析内容并生成层级结构化飞书块"""
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         return False
     token = get_feishu_token()
@@ -59,19 +60,47 @@ def append_to_feishu_doc(doc_id, content):
         return False
 
     blocks = []
-    for paragraph in content.split('\n'):
-        if not paragraph.strip():
+    for line in content.split('\n'):
+        stripped = line.strip()
+        if not stripped:
             continue
+
+        # 判断块类型
+        if stripped.startswith('## '):
+            # H2 标题（如 "## 2026年07月23日：节目名"）
+            block_type = 4  # H2
+            text_content = stripped[3:]  # 去掉 "## "
+        elif stripped.startswith('▎'):
+            # H3 标题（如 "▎核心观点"）
+            block_type = 5  # H3
+            text_content = stripped  # 保留完整内容（含 ▎ 符号）
+        elif stripped == '---':
+            # 分隔线用空行代替（飞书里可以用空行自然分隔）
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [{"text_run": {"content": ""}}],
+                    "style": {}
+                }
+            })
+            continue
+        else:
+            # 正文
+            block_type = 2
+            text_content = stripped
+
         blocks.append({
-            "block_type": 2,
+            "block_type": block_type,
             "text": {
-                "elements": [{"text_run": {"content": paragraph}}],
+                "elements": [{"text_run": {"content": text_content}}],
                 "style": {}
             }
         })
+
     if not blocks:
         return False
 
+    # 分批写入
     batch_size = 50
     success = True
     for i in range(0, len(blocks), batch_size):
@@ -104,7 +133,6 @@ def init_subscriptions():
     with open(SUBSCRIPTIONS_FILE, 'r', encoding='utf-8') as f:
         subs = json.load(f)
 
-    # 自动创建飞书文档（仅对没有 doc_id 的播客）
     updated = False
     for sub in subs:
         if not sub.get('feishu_doc_id'):
@@ -123,7 +151,6 @@ def init_subscriptions():
     return subs
 
 def load_processed():
-    """加载已处理的 guid 记录"""
     if not os.path.exists(PROCESSED_FILE):
         return {}
     with open(PROCESSED_FILE, 'r', encoding='utf-8') as f:
@@ -144,7 +171,6 @@ def git_commit(file_path, message):
 
 # ================= 播客抓取与过滤 =================
 def get_latest_episode(rss_url):
-    """返回 (title, audio_url, link, guid) 或 (None, None, None, None)"""
     headers = {'User-Agent': 'Mozilla/5.0'}
     resp = requests.get(rss_url, headers=headers, timeout=30)
     resp.raise_for_status()
@@ -157,7 +183,6 @@ def get_latest_episode(rss_url):
         if 'audio' in enc.type or enc.href.endswith(('.m4a','.mp3')):
             audio_url = enc.href
             break
-    # 获取 guid，如果没有则用 link 或 title 作为后备
     guid = latest.get('id') or latest.get('link') or latest.title
     return latest.title, audio_url, latest.link, guid
 
@@ -230,7 +255,7 @@ def _call_dashscope(text, title, part_num, total_parts):
         print(f"AI 异常: {e}")
         return text
 
-# ================= 单播客处理（带去重） =================
+# ================= 单播客处理 =================
 def process_podcast(name, rss_url, doc_id, processed_db):
     print(f"\n=== 处理 {name} ===")
     title, audio_url, link, guid = get_latest_episode(rss_url)
@@ -238,10 +263,9 @@ def process_podcast(name, rss_url, doc_id, processed_db):
         print(f"{name} RSS 无条目，跳过。")
         return False, processed_db
 
-    # 去重检查
     last_guid = processed_db.get(name)
     if last_guid and last_guid == guid:
-        print(f"{name} 已处理过该期节目 (guid: {guid})，跳过。")
+        print(f"{name} 已处理过 (guid: {guid})，跳过。")
         return False, processed_db
 
     print(f"标题: {title}")
@@ -260,15 +284,14 @@ def process_podcast(name, rss_url, doc_id, processed_db):
         success = append_to_feishu_doc(doc_id, full_text)
         if success:
             print(f"{name} 已写入飞书。")
-            processed_db[name] = guid  # 更新已处理 guid
+            processed_db[name] = guid
             return True, processed_db
         else:
-            print(f"{name} 飞书写入失败，但 guid 已处理，避免重复尝试。")
+            print(f"{name} 飞书写入失败。")
             processed_db[name] = guid
             return False, processed_db
     else:
-        print(f"{name} 无飞书文档 ID，跳过写入。")
-        # 即使未写入，也记录已处理，避免下次重复下载
+        print(f"{name} 无飞书文档 ID。")
         processed_db[name] = guid
         return False, processed_db
 
@@ -286,7 +309,6 @@ def main():
         if success:
             updated.append(name)
 
-    # 保存已处理记录
     save_processed(processed_db)
 
     if updated:
